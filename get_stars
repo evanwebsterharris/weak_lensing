@@ -1,0 +1,32 @@
+#!/usr/bin/env python2.7
+
+import argparse
+import star_grab as sg
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='interface for star_grab.')
+    parser.add_argument('filename', type=str, help='sextractor .cat file.')
+    parser.add_argument(
+        '--plot', action='store_true', help='plot the stars.')
+    parser.add_argument(
+        '--accuracy',\
+        help=('higher = less accurate. 0 would be most accurate, '
+              'i.e. read every object.'), type=int, default=0)
+    parser.add_argument(
+        '--create_file', action='store_true',\
+        help='make an output file instead of overwriting.')
+    parser.add_argument(
+        '--create_galaxy_file', action='store_true',\
+        help='make a .cat file of just galaxies.')
+    parser.add_argument(
+        '--overwrite', action='store_true',\
+        help='overwrite the original .cat file.')
+
+    args = vars(parser.parse_args())
+
+    sg.get_stars(
+        args['filename'], accuracy=int(args['accuracy']),\
+        create_file=args['create_file'],
+        create_galaxy_file=args['create_galaxy_file'],
+        overwrite=args['overwrite'],
+        plot_objects=args['plot']) 

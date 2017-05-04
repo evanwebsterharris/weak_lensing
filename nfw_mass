@@ -1,0 +1,281 @@
+#!/usr/bin/env python2.7
+
+# meant to calculate cluster mass by doing chi-squared fit to nfw profile
+# formula for dark matter halo (whose radius is taken to be the virial
+# radius, R_200).
+#
+# takes as input a fiatmap map, which is in theory accurately maps mass
+# density, even though the predicted mass is not correct.
+
+from __future__ import division
+import sys
+import numpy as np
+import matplotlib.ticker
+from astropy.io import fits
+from astropy import wcs
+from matplotlib import *
+from matplotlib.pyplot import *
+from pylab import *
+from scipy.optimize import curve_fit
+
+numbins = 20 # number of radial bins
+use_catalog = False # trust sextractor to find cluster centroid
+
+def delta(c):
+	"""returns characteristic overdensity, delta, as a function of c."""
+	d = (200.0/3)*(c**3/(np.log(1 + c) - c/(1+c)))
+	return d
+
+def nfw(r, c, R_200, p_crit=0.136):
+	"""calculates p(r) using the NFW equation. cosmological units."""
+	return p_crit*(delta(c)*R_200**2)/(c*r*(R_200 + c*r)**2)
+
+def kappa(r, Ri, k_s):
+	"""based on the Bartelmann paper."""
+	return 2.0*k_s*f(Ri*r)/((Ri*r)**2 - 1) # Ri = 1/R_s
+
+def f(x):
+	return np.piecewise(x, [x>1, x<1, x==1], [
+		lambda x: 1 - 2.0/(np.sqrt(x**2 - 1))*np.arctan(
+			np.sqrt((x-1)/(x+1))),
+		lambda x: 1 - 2.0/(np.sqrt(1 - x**2))*np.arctan(
+			np.sqrt((1-x)/(1+x))),
+		lambda x: 0
+	])
+	
+###########################################################################
+
+def g_l(x):
+	"""from Wright and Brainerd. g<"""
+	return 8*np.arctanh(np.sqrt((1-x)/(1+x)))/(x**2*np.sqrt(1-x**2)) +\
+		(4/x**2)*np.log(x/2) - 2/(x**2 - 1) +\
+		4*np.arctanh(np.sqrt((1-x)/(1+x)))/((x**2 - 1)*np.sqrt((1 - x**2)))
+
+def g_g(x):
+	"""from Wright and Brainerd. g>"""
+	return 8*np.arctan(np.sqrt((x-1)/(1+x)))/(x**2*np.sqrt(x**2-1)) +\
+		(4/x**2)*np.log(x/2) - 2/(x**2 - 1) +\
+		4*np.arctan(np.sqrt((x-1)/(1+x)))/((x**2 - 1)**(3/2))
+
+def gamma_wb(r, R_s=2000.0, c=400.0, p_c=0.136, E_c=5.3*10**9, h=0.678):
+	"""
+	from Wright and Brainerd. these are approximations for the critical 
+	parameters. E_c, i.e. sigma_c, is from the Fischer-Tyson paper. 
+	"""
+	return np.piecewise(r, [r>R_s, r<R_s, r==R_s], [
+		lambda r: R_s*delta(c)*g_g(r/R_s)/E_c,
+		lambda r: R_s*delta(c)*g_l(r/R_s)/E_c,
+		lambda r: R_s*(10/3 + 4*np.log(1/2))/E_c
+	])
+
+###########################################################################
+
+
+def get_column_names(fiatfile):
+    """
+    returns list of column names from a .fiat file.
+    """
+    col_names = []
+    comments = 0
+    with open(fiatfile) as catalog:
+        for line in catalog:
+            if line.startswith('#'):
+                comments += 1
+                if 'ttype' in line.lower():
+                    col_names.append(line.split('=')[1].split()[0].lower())
+            else:
+                return col_names
+
+def bin_radii(data, centroid, bins=numbins, scale=10.0, pixscale=5.51):
+	"""
+	data = 2D array.
+	centroid = [x_c,y_c].
+	scale = # of image pixels per map pixel
+		(determined by blocksize in fiatmap)
+	pixscale = kpc/pixel (determined from fits header)
+	returns:
+		binned = 2D array. array of bins, with each radius put in its bin.
+		r_bins = array of cutoff value for each bin.
+	"""
+	# first we bin the radii, circularly...
+	# ...careful, because numpy arrays are indexed differently from fits
+	# images (y axis reversed).
+
+	x_c, y_c = centroid
+	box_size= min([
+		x_c, y_c,
+		np.abs(data.shape[0] - x_c),
+		np.abs(data.shape[1] - y_c),
+		])
+	
+	print "data shape is", data.shape, "\b."
+	print "centroid is", centroid, "\b."
+
+	a = int(int(x_c) - box_size/2)
+	b = int(int(x_c) + box_size/2)
+	c = int(int(y_c) - box_size/2)
+	d = int(int(y_c) + box_size/2) # bounds for new data
+
+	#print data.shape
+
+	new_data = np.asarray(data[a:b,c:d])
+	# ^new_data is a square centered around the centroid.
+	print "max is", np.amax(new_data)
+	#imshow([i**2 for i in new_data], cmap='rainbow', vmax = 0.020**2)
+	#show()
+	#pause(1)
+	#raw_input()
+	#close()
+
+	#print "new data is:", new_data
+	#print "new data has shape ", new_data.shape
+
+	r_bins = np.linspace(0, box_size/2, bins)
+	r_values = np.zeros(new_data.shape)
+	# ^will be array of radii corrresponding to cartesian coordinates.
+	binned = [[] for b in r_bins] # 2D array. sorry
+
+	s1, s2 = [0.5*new_data.shape[0], 0.5*new_data.shape[1]]
+	for x in range(new_data.shape[0]):
+		for y in range(new_data.shape[1]):
+			r_values[x][y] = np.sqrt((x-s1)**2 + (y-s1)**2)
+
+
+	for (i, val) in enumerate(r_bins[:-1]):
+		pixlist = []
+		for x in range(new_data.shape[0]):
+			for y in range(new_data.shape[1]):
+				if r_values[x][y] > r_bins[i] and\
+				   r_values[x][y] < r_bins[i+1]:
+					pixlist.append(0.5*new_data[x][y]) # D = gamma/2
+
+		binned[i] = pixlist
+				
+	return binned, [r*scale*pixscale for r in r_bins] 
+	#return binned, [r*scale for r in r_bins] 
+
+def fit_parameters(mapfile, manual_centroid=False):
+	"""
+	takes a fiatmap file.
+	plots density as a function of distance from cluster center.
+	fits values of R_200 and c (if c isn't already given).
+	{map_name}.fits and {mapname}.fiat must exist if manual_centroid=False.
+	"""
+	root = mapfile.split('.')[:-1][0] # sorry
+	fiatfile = str(root + '.fiat')
+
+	hdulist = fits.open(mapfile)
+	raw_data = fits.open(mapfile)[0].data
+	data1, data2 = [raw_data[0], raw_data[1]] # fiatmap is 2-dimensional
+	data_shape = (data1).shape
+	# ^ use data1 for the shear map, data2 for the 45-degree null map.
+	good_data = data1[::-1,::-1]
+	#good_data = data1
+
+	# now we convert to wcs coordinates:
+	rootname = '.'.join(
+		(hdulist[0].header['TITLE'].split()[-1]).split('.')[:-1])
+	# ^the title is `lensing map of imagename.fiat,' so we need to get just
+	# `imagename' from this.
+	print "using", rootname + '.fits', "as root."
+	
+	hdulist = fits.open(rootname + '.fits')
+	w = wcs.WCS(hdulist[0].header)
+					
+	if not manual_centroid:
+		if use_catalog == True:
+			cols = get_column_names(fiatfile)
+			with open(fiatfile) as clusters:
+				mag_loc = cols.index('mag_iso')
+				x_loc = cols.index('x')
+				y_loc = cols.index('y')
+				max_mag = 0
+				for line in clusters:
+					line = line.split()
+					if not line[0] == '#':
+						mag = line[mag_loc]
+						if mag > max_mag and (
+						int(float(line[x_loc])) > good_data.shape[0]/8) and (
+						int(float(line[y_loc])) > good_data.shape[1]/8):
+							max_mag = mag
+							location = [
+								int(float(a)) for a in [
+									line[x_loc], line[y_loc]
+								]]
+							# ^location is the "cluster location"
+				#print "centroid location was found to be", location, "\b."
+		else:
+			print "selecting center..."
+			lims = [
+				good_data.shape[0]/4, good_data.shape[1]/4,
+				good_data.shape[0] - good_data.shape[0]/4,
+				good_data.shape[1] - good_data.shape[1]/4,
+			]
+			# ^conservatively excluding edges
+			enumerated_data = np.ndenumerate(good_data)
+			max_val = 0
+			for (x, y), val in enumerated_data:
+				if val > max_val and (lims[0] < x < lims[2])\
+				and (lims[1] < y < lims[3]):
+					location = (x,y)
+			print "centroid location was found to be", location, "\b."
+			print "maximum value is", good_data[location[0]][location[1]],\
+				  "\b."
+
+	else:
+		location = int(sys.argv[1]), int(sys.argv[2])
+		print "value at location is", good_data[location[0]][location[1]],\
+			"\b."
+
+	# end of auto_centroid. now we work with good_data.
+	binned_data, bin_list = bin_radii(good_data, centroid=location)
+	actual_pixel_radii = [
+		np.average([bin_list[i], bin_list[i+1]])\
+		for i in range(len(bin_list)-1)
+	]
+
+	# now for the fitting:
+
+	full_x_data = np.array(actual_pixel_radii)[:]
+	full_y_data = np.array([np.average(m) for m in binned_data if m][:])
+
+	x_data = np.array(actual_pixel_radii)[:-4]
+	y_data = np.array([np.average(m) for m in binned_data if m][:-4])
+
+	popt, pcov = curve_fit(
+		lambda r, Rs, c: gamma_wb(r, Rs, c), x_data, y_data,
+		sigma=[np.std(m) for m in binned_data][:-5])
+
+	errs = np.sqrt(np.diag(pcov))
+	#scatter(actual_pixel_radii,
+	#		[np.average(m) for m in binned_data][:-1], s=2, c='black')
+	fig = figure()
+	ax = fig.add_subplot(1,1,1)
+	ax.errorbar(actual_pixel_radii,
+			[np.average(m) for m in binned_data][:-1],
+	 		yerr=[np.std(m) for m in binned_data][:-1], fmt='ko')
+	err = 3*((popt[0]*popt[1])**2)*(errs[0]*errs[1])*0.136*(800.0/3)*np.pi
+	print "parameters are", popt, "\b."
+	print "parameter errors are", errs, "\b."
+	print "mass is", ((popt[0]*popt[1])**3)*0.136*(800.0/3)*np.pi, "\b."
+	print "error is %.2e" % err
+	temp_x = np.linspace(full_x_data[0], full_x_data[-1], 200)
+	ax.plot(temp_x, gamma_wb(temp_x, *popt), 'r-', label="KFW fit")
+	xlabel('r ($h^{-1}$ kpc)')
+	ylabel('$\gamma_+$')
+	ax.set_xscale('log')
+	#ax.set_yscale('log', nonposy='clip')
+	ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, pos: str(int(round(x)))))
+	#ylim([10e-7, 10e1])
+	legend()
+	draw()
+	savefig('nfw.pdf')
+	pause(1)
+	raw_input()
+	close()
+
+if __name__ == '__main__':
+	if len(sys.argv) == 1:
+		fit_parameters('my_map.fits', manual_centroid=False)
+	else:
+		fit_parameters('my_map.fits', manual_centroid=True)

@@ -1,0 +1,126 @@
+#!/usr/bin/env python2.7
+# test program for ellipticity. 
+
+import sys
+import star_grab
+import warnings
+import numpy as np
+from matplotlib import *
+from pylab import *
+
+help = "usage: ellipticity [--plot] file\n" +\
+       "catfile is the original .cat file of stars + galaxies."
+
+warnings.filterwarnings('ignore', '', RuntimeWarning)
+make_plot = False # default: don't plot ellipticities
+
+def get_column_names(fiatfile):
+    """
+    returns list of column names for a fiat file.
+    """
+    col_names = []
+    comments = 0
+    with open(fiatfile) as catalog:
+        for line in catalog:
+            if line.startswith('#'):
+                comments += 1
+                if 'ttype' in line.lower():
+                    col_names.append(line.split('=')[1].split()[0].lower())
+            else:
+                return col_names
+
+if len(sys.argv) == 1:
+    sys.exit(help)
+
+elif sys.argv[1] == '--plot':
+    make_plot = True
+    sys.argv.pop(1)
+
+if sys.argv[1].endswith('fits'):
+    input_file = sys.argv[1]
+    [star_list, galaxy_list] = star_grab.get_stars(
+        input_file, create_file=False, overwrite=False)
+    base_name = ('.').join(input_file.split('.')[:-1])
+    cat_file = base_name + '.cat'
+
+    with open(cat_file) as catalog:
+        for line in catalog:
+            if line.startswith('#'):
+                line_list = line.split()
+                if line_list[2] == 'ELLIPTICITY':
+                    el = int(line_list[1]) - 1 # el = ellipticity
+                elif line_list[2] == 'THETA_IMAGE':
+                    th = int(line_list[1]) - 1 # th = theta
+                else:
+                    pass
+            else:
+                break # don't have to read through whole catalog
+
+else:
+    if not sys.argv[1].endswith('fiat'):
+        print "Assuming this is a fiat file..."
+    fiat_file = sys.argv[1]
+    col_names = get_column_names(fiat_file)
+    star_list = []
+    galaxy_list = [] # no galaxy list for now for fiat files
+   
+    with open(fiat_file) as catalog:
+        for line in catalog:
+            if not line.startswith('#'):
+                star_list.append([float(j) for j in line.split()])
+
+    th = col_names.index('theta')
+    try:
+        el = col_names.index('ellip')
+    except ValueError:
+        el = col_names.index('ellipticity')
+
+all_e = [s[el] for s in star_list]
+e_std = np.std(all_e)
+ellipticities = [o for o in all_e if o < 2*e_std]
+theta = [s[th] for s in star_list]
+
+e1 = [e*np.cos(2*t*(np.pi/180)) for (e,t) in zip(all_e, theta)]
+e2 = [e*np.sin(2*t*np.pi/180) for (e,t) in zip(all_e, theta)]
+# ^prints out-of-range ellipticities as well
+
+all_g = [s[el] for s in galaxy_list]
+g_std = np.std(all_g)
+#ellipticities_g = [o for o in all_g if o < 2*g_std]
+ellipticities_g = [o for o in all_g]
+theta_g = [s[th] for s in galaxy_list]
+# ^hmm
+
+g1 = [e*np.cos(2*t*(np.pi/180)) for (e,t) in zip(all_g, theta_g)]
+g2 = [e*np.sin(2*t*np.pi/180) for (e,t) in zip(all_g, theta_g)]
+
+center = [np.average(e1), np.average(e2)]
+target_circle = Circle(center, e_std, color='g', fill=False)
+
+if galaxy_list:
+    center2 = [np.average(g1), np.average(g2)]
+    target_circle2 = Circle(center, g_std, color='k', fill=False)
+
+if len(sys.argv) == 2:
+    print "Average is at ({0}, {1}).".format(*center)
+    print "Standard deviation is {0}".format(e_std)
+
+if make_plot == True:
+    ax = subplot(111)
+    ax.scatter(e1, e2, c='blue', s=1, edgecolors='none')
+    if galaxy_list:
+        scatter(center2[0], center2[1], marker='o', label='Galaxy Average')
+    ax.scatter(center[0], center[1], color='red', marker='o', label='Star Average')
+    ax.add_artist(target_circle)
+    axhline(0, color='black')
+    axvline(0, color='black')
+    ax.plot([], [], 'g-', label="One Standard Deviation")
+    xlim(-0.15,0.15)
+    ylim(-0.15,0.15)
+    legend()
+    xlabel("$e_1$")
+    ylabel("$e_2$")
+    title("Parametrized Ellipticities of Stars")
+    gca().set_aspect('equal', adjustable='box')
+    #axis('equal')
+    show()
