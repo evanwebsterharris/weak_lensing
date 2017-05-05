@@ -1,0 +1,81 @@
+#!/usr/bin/env python2.7
+
+# the opposite of sex2fiat. using it to make the .star file from {root}.E.
+
+import argparse
+import subprocess
+import sys
+import glob
+
+def get_column_names(fiatfile):
+    """
+    returns list of column names.
+    """
+    col_names = []
+    descriptions = []
+    with open(fiatfile) as catalog:
+        for line in catalog:
+            if line.startswith('#'):
+                if 'ttype' in line.lower():
+                    col_names.append(line.split('=')[1].split()[0].lower())
+                    if '/' in line:
+                        if (line.split('/', 1)[1]).split(): # description
+                            descriptions.append(
+                                line.split('/', 1)[1].strip())
+                    else:
+                        descriptions.append('(no description)')
+            else:
+                pass
+
+    return col_names, descriptions
+
+def convert_to_sex(fiatfile, overwrite=False):
+    base_name = ('.').join(fiatfile.split('.')[:-1])
+    temp_name = base_name + '.tmp'
+    column_names, descriptions = get_column_names(fiatfile)
+
+    if overwrite==True:
+        with open(temp_name, 'w') as target_file:
+            for (i, column_and_desc) in enumerate(
+            zip(column_names, descriptions), 1):
+                target_file.write(
+                    '#' + ' '*(4 - len(str(i))) + str(i)+\
+                    ' '+ column_and_desc[0].upper() +\
+                    ' '*(23 - len(column_and_desc[0].upper())) +\
+                    column_and_desc[1])
+
+            with open(fiatfile, 'r') as input_file:
+                for line in input_file:
+                    if not line.startswith('#'):
+                        target_file.write(line) # okay
+
+            target_file = fiatfile
+            print 'overwriting {0}...'.format(target_file)
+            cmd = 'mv {0} {1}'.format(temp_name, target_file)
+            print cmd
+            process = subprocess.Popen(cmd.split())
+            process.wait()
+
+    else:
+        for (i, column_and_desc) in enumerate(
+        zip(column_names, descriptions), 1):
+            print '#' + ' '*(4 - len(str(i))) + str(i)+\
+                ' '+ column_and_desc[0].upper() +\
+                ' '*(23 - len(column_and_desc[0].upper())) +\
+                column_and_desc[1]
+
+        with open(fiatfile, 'r') as input_file:
+            for line in input_file:
+                if not line.startswith('#'):
+                    print line,
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description="usage: fiat2sex.py fiatfile")
+    parser.add_argument( 'filename', type=str)
+    parser.add_argument(
+        '--overwrite', action='store_true',\
+        help='overwrite the file in place, e.g. for dlscirc')
+
+    args = vars(parser.parse_args())
+    convert_to_sex(args['filename'], args['overwrite'])
