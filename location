@@ -1,0 +1,144 @@
+#!/usr/bin/env python2.7
+ 
+# plots, you know, the location of two --- or more, arbitrary,
+# I guess---files...
+
+import sys
+import warnings
+import numpy as np
+import matplotlib.patches as mpatches
+from matplotlib import *
+from pylab import *
+
+warnings.filterwarnings('ignore', '', FutureWarning)
+accuracy = 0 # how many objects to skip (picks every 2**accuracy objects)
+
+if len(sys.argv) == 1:
+    print "  usage: location [--a0] [--size] [--ellipticity] [--whisker] file1 file2 ..."
+    sys.exit(0)
+
+# parse input, hopefully all .fiat files
+filelist = [arg for arg in sys.argv[1:] if not arg.startswith('--')]
+opts = [arg.strip('--') for arg in sys.argv[1:] if arg.startswith('--')]
+if any([o.startswith('a') for o in opts]):
+    accuracy = int(opts[(
+        [o.startswith('a') for o in opts].index(True))].strip('a'))
+    print "accuracy is", accuracy, "\b."
+
+def get_column_names(fiatfile):
+    col_names = []
+    with open(fiatfile) as catalog:
+        for line in catalog:
+            if line.startswith('#'):
+                if 'ttype' in line.lower():
+                    col_names.append(line.split('=')[1].split()[0].lower())
+            else:
+                return col_names
+
+if 'whisker' in opts:
+    fig = figure()
+    ax = fig.add_subplot(111)
+
+for fiatfile in filelist:
+    cols = get_column_names(fiatfile)
+    x_loc, y_loc = [cols.index(i) for i in ['x', 'y']]
+    fwhm_loc = cols.index('mag')
+    try:
+        e_loc = cols.index('ellipticity')
+    except ValueError:
+        e_loc = cols.index('ellip')
+
+    theta = cols.index('theta')
+    x_vals = []
+    y_vals = []
+    sizes = []
+    ellips = []
+    angles = []
+
+    with open(fiatfile) as catalog:
+        for line in catalog:
+            if not line.startswith('#'):
+                x_vals.append(float(line.split()[x_loc]))
+                y_vals.append(float(line.split()[y_loc]))
+                sizes.append(float(line.split()[fwhm_loc]))
+                ellips.append(float(line.split()[e_loc]))
+                angles.append(float(line.split()[theta]))
+
+    print "{0} objects.".format(len(sizes))
+
+    if 'size' in opts:
+        color = np.random.rand(3,)
+        scatter(x_vals[0], y_vals[0], c=color,
+                s=1*(sizes[0] - min(sizes))**2, edgecolors='none',
+                label=fiatfile)
+
+        for count in range(1,len(x_vals)):
+            if count % 2**accuracy == 0:
+                scatter(x_vals[count], y_vals[count], c=color,
+                        s=1*(sizes[count] - min(sizes))**2,
+                        edgecolors='none', label='_nolegend_')
+        legend()
+                    
+    elif 'ellipticity' in opts:
+        color = np.random.rand(3,)
+        scatter(x_vals[0], y_vals[0], c=color,
+                s=10*(ellips[0] - min(ellips)), edgecolors='none',
+                label=fiatfile)
+
+        for count in range(1,len(x_vals)):
+            if count % 2**accuracy == 0:
+                scatter(x_vals[count], y_vals[count], c=color,
+                        s=10*(ellips[count] - min(ellips)),
+                        edgecolors='none', label='_nolegend_')
+        legend()
+
+    elif 'whisker' in opts:
+        print "making whisker plot..."
+
+        color = np.random.rand(3,)
+        ax.set_xlim(min(x_vals), max(x_vals))
+        ax.set_ylim(min(y_vals), max(y_vals))
+
+        ang = 2*angles[0] # = theta
+        point_path = path.Path(
+            [(x_vals[0] - 10e2*ellips[0]*np.cos(ang),
+              y_vals[0] - 10e2*ellips[0]*np.sin(ang)),
+             (x_vals[0] + 10e2*ellips[0]*np.cos(ang),
+              y_vals[0] + 10e2*ellips[0]*np.cos(ang))],
+              codes=[path.Path.MOVETO, path.Path.LINETO])
+
+        #patch = patches.PathPatch(
+        #    point_path, facecolor=color, edgecolor=color, label=fiatfile)
+        patch = patches.PathPatch(
+            point_path, facecolor=color, edgecolor=color)
+        ax.add_patch(patch)
+        xlabel("$x$")
+        ylabel("$y$")
+
+        for count in range(1,len(x_vals)):
+            if count % 2**accuracy == 0:
+                ang = 2*angles[count] 
+                point_path = path.Path(
+                    [(x_vals[count] - 10e2*ellips[count]*np.cos(ang),
+                      y_vals[count] - 10e2*ellips[count]*np.sin(ang)),
+                     (x_vals[count] + 10e2*ellips[count]*np.cos(ang),
+                      y_vals[count] + 10e2*ellips[count]*np.cos(ang))],
+                      codes=[path.Path.MOVETO, path.Path.LINETO])
+
+                patch = patches.PathPatch(
+                    point_path, edgecolor=color, label='_nolegend_')
+                ax.add_patch(patch)
+
+        legend()
+
+
+    else:
+        scatter(x_vals, y_vals, c=np.random.rand(3,), s=3,
+                edgecolors='none', label=fiatfile)
+        legend()
+
+
+draw()
+pause(1)
+raw_input()
+close()
